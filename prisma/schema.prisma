@@ -1,0 +1,260 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum MatchFormat {
+  T20
+  ODI
+  TEST
+}
+
+enum MatchStatus {
+  UPCOMING
+  LIVE
+  COMPLETED
+}
+
+enum MarketStatus {
+  OPEN
+  SUSPENDED
+  CLOSED
+  SETTLED
+}
+
+enum OptionStatus {
+  ACTIVE
+  WON
+  LOST
+  VOID
+}
+
+enum BetStatus {
+  PENDING
+  WON
+  LOST
+  CASHED_OUT
+  VOID
+}
+
+enum BetType {
+  SINGLE
+  ACCUMULATOR
+}
+
+enum TransactionType {
+  ADMIN_GRANT
+  BET_PLACED
+  BET_WON
+  BET_REFUND
+  CASHOUT
+}
+
+model User {
+  id           String      @id @default(uuid())
+  email        String      @unique
+  username     String      @unique
+  name         String
+  passwordHash String
+  role         UserRole    @default(USER)
+  status       UserStatus  @default(ACTIVE)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  wallet        Wallet?
+  bets          DemoBet[]
+  auditLogs     AuditLog[]     @relation("AdminAuditLogs")
+  adminGrants   CreditTransaction[] @relation("AdminGrantTransactions")
+  settlements   Settlement[]
+
+  @@index([email])
+  @@index([username])
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  balance   Float    @default(0.0) // All new users start with exactly 0 demo credits
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions CreditTransaction[]
+
+  @@index([userId])
+}
+
+model CreditTransaction {
+  id               String          @id @default(uuid())
+  walletId         String
+  amount           Float
+  balanceAfter     Float           @default(0.0)
+  type             TransactionType
+  description      String
+  adminAuditReason String?
+  adminUserId      String?
+  createdAt        DateTime        @default(now())
+
+  wallet    Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  adminUser User?  @relation("AdminGrantTransactions", fields: [adminUserId], references: [id], onDelete: SetNull)
+
+  @@index([walletId])
+  @@index([adminUserId])
+  @@index([createdAt])
+}
+
+model Team {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  shortName String
+  code      String   @unique
+  logoUrl   String?
+  createdAt DateTime @default(now())
+
+  homeMatches CricketMatch[] @relation("HomeTeam")
+  awayMatches CricketMatch[] @relation("AwayTeam")
+}
+
+model CricketMatch {
+  id             String      @id @default(uuid())
+  matchNumber    String
+  series         String
+  venue          String
+  format         MatchFormat @default(T20)
+  status         MatchStatus @default(UPCOMING)
+  team1Id        String
+  team2Id        String
+  team1Score     String?     // e.g. "185/4 (20.0)"
+  team2Score     String?     // e.g. "142/8 (18.2)"
+  currentInnings Int?
+  result         String?
+  matchDate      DateTime
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  team1   Team            @relation("HomeTeam", fields: [team1Id], references: [id])
+  team2   Team            @relation("AwayTeam", fields: [team2Id], references: [id])
+  markets BettingMarket[]
+
+  @@index([status])
+  @@index([matchDate])
+}
+
+model BettingMarket {
+  id         String       @id @default(uuid())
+  matchId    String
+  name       String
+  marketType String
+  status     MarketStatus @default(OPEN)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  match       CricketMatch       @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  options     MarketOption[]
+  selections  DemoBetSelection[]
+  settlements Settlement[]
+
+  @@index([matchId])
+  @@index([status])
+}
+
+model MarketOption {
+  id        String       @id @default(uuid())
+  marketId  String
+  label     String
+  odds      Float
+  status    OptionStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+
+  market     BettingMarket      @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  selections DemoBetSelection[]
+
+  @@index([marketId])
+}
+
+model DemoBet {
+  id              String    @id @default(uuid())
+  userId          String
+  betType         BetType   @default(SINGLE)
+  totalStake      Float
+  potentialReturn Float
+  actualReturn    Float?
+  status          BetStatus @default(PENDING)
+  cashOutAvailable Boolean  @default(false)
+  cashOutValue    Float?
+  settledAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  selections DemoBetSelection[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model DemoBetSelection {
+  id             String       @id @default(uuid())
+  betId          String
+  marketId       String
+  marketOptionId String
+  matchTitle     String
+  marketName     String
+  selectionLabel String
+  odds           Float
+  status         OptionStatus @default(ACTIVE)
+
+  bet    DemoBet       @relation(fields: [betId], references: [id], onDelete: Cascade)
+  market BettingMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  option MarketOption  @relation(fields: [marketOptionId], references: [id], onDelete: Cascade)
+
+  @@index([betId])
+  @@index([marketId])
+  @@index([marketOptionId])
+}
+
+model Settlement {
+  id               String   @id @default(uuid())
+  marketId         String
+  winningOptionId  String?
+  settledByAdminId String
+  note             String?
+  settledAt        DateTime @default(now())
+
+  market   BettingMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  admin    User          @relation(fields: [settledByAdminId], references: [id], onDelete: Cascade)
+
+  @@index([marketId])
+  @@index([settledByAdminId])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  adminUserId String
+  action      String
+  targetType  String
+  targetId    String
+  details     String
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  adminUser User @relation("AdminAuditLogs", fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId])
+  @@index([createdAt])
+  @@index([action])
+}
